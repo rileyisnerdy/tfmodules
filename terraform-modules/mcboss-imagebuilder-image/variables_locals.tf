@@ -118,7 +118,9 @@ locals {
 }
 
 locals {
-        ### ARN: arn:...:component/<name>/<major>.<minor>.<patch>/<build>
+        ### ListComponents returns component VERSION arns, which have three nodes:
+        ### arn:...:component/<name>/<major>.<minor>.<patch>. Build version arns carry a
+        ### fourth node, but AWS assigns build numbers and does not list them here.
         published_builds = [
                 for arn in data.aws_imagebuilder_components.historical_versions.arns : {
                         arn     = arn
@@ -128,9 +130,8 @@ locals {
                         major   = tonumber(split(".", split("/", arn)[2])[0])
                         minor   = tonumber(split(".", split("/", arn)[2])[1])
                         patch   = tonumber(split(".", split("/", arn)[2])[2])
-                        build   = tonumber(split("/", arn)[3])
                 }
-                if length(split("/", arn)) == 4
+                if length(split("/", arn)) == 3
         ]
 
         ### Highest published version per component name, across every major.minor
@@ -152,14 +153,14 @@ locals {
                 ]...), -1)
         }
 
-        ### ARN of the newest build at that patch, or "" if never published.
-        ### Zero padded so the text sort orders by build number.
+        ### Version arn at that patch, or "" if never published. name + line + patch
+        ### identifies one version arn, so there is nothing to sort.
         published_arn = {
                 for c, line in local.version_lines :
-                c => try(split("|", reverse(sort([
-                        for b in local.published_builds : format("%09d|%s", b.build, b.arn)
+                c => try([
+                        for b in local.published_builds : b.arn
                         if b.name == local.component_names[c] && b.line == line && b.patch == local.published_patch[c]
-                ]))[0])[1], "")
+                ][0], "")
         }
 }
 
