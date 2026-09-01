@@ -1,0 +1,139 @@
+name: Amazon EKS Optimized Amazon Linux 2023 AMI
+description: Installs Amazon EKS-optimized Amazon Linux 2023 artifacts for Amazon EKS version 1.33.
+schemaVersion: 1.0
+phases:
+  - name: build
+    steps:
+      - name: CloneScriptsRepository
+        action: ExecuteBash
+        inputs:
+          commands:
+          - |
+            #!/bin/bash
+            set -euo pipefail
+
+            dnf install -y git  
+
+            echo "Retrieving GitLab credentials..."
+            GITLAB_USERNAME=$(aws ssm get-parameter \
+              --name "/imagebuilder/gitlab/username" \
+              --with-decryption \
+              --query "Parameter.Value" \
+              --output text)
+
+            GITLAB_PASSWORD=$(aws ssm get-parameter \
+              --name "/imagebuilder/gitlab/password" \
+              --with-decryption \
+              --query "Parameter.Value" \
+              --output text)
+
+            if [ -z "$GITLAB_USERNAME" ] || [ -z "$GITLAB_PASSWORD" ]; then
+              echo "Failed to retrieve GitLab credentials"
+              exit 1
+            fi
+
+            # Use a temporary directory for git config and credentials
+            GIT_CONFIG_DIR=$(mktemp -d)
+            CRED_FILE="$GIT_CONFIG_DIR/git-credentials"
+
+            cat <<EOF > "$CRED_FILE"
+            https://${GITLAB_USERNAME}:${GITLAB_PASSWORD}@git.acme.usmc.mil
+            EOF
+
+            # Tell git to use this config and credentials file
+            GIT_CONFIG_GLOBAL="$GIT_CONFIG_DIR/gitconfig"
+            git config --file "$GIT_CONFIG_GLOBAL" credential.helper "store --file=$CRED_FILE"
+
+            # Clone repo without exposing credentials on the command line
+            GIT_CONFIG_GLOBAL="$GIT_CONFIG_GLOBAL" git clone -c http.sslVerify=false \
+              https://git.acme.usmc.mil/kubernetes/imagebuilder.git /tmp/scripts
+
+            # Cleanup credentials
+            rm -rf "$GIT_CONFIG_DIR"
+            chmod +x /tmp/scripts/*.sh
+            
+      - name: AddDoDCerts
+        action: ExecuteBash
+        timeoutSeconds: 5400
+        onFailure: Abort
+        maxAttempts: 10
+        inputs:
+          commands:
+            - /tmp/scripts/addDoDCerts.sh
+      
+      - name: SetGlobalVariables
+        action: ExecuteBash
+        timeoutSeconds: 300
+        onFailure: Abort
+        maxAttempts: 3
+        inputs:
+          commands:
+            - /tmp/scripts/setEnv.sh
+      
+      - name: UpdateVolumeMounts
+        action: ExecuteBash
+        timeoutSeconds: 5400
+        onFailure: Abort
+        maxAttempts: 10
+        inputs:
+          commands:
+            - /tmp/scripts/updateVolumeMounts.sh
+
+      - name: UpgradeServer
+        action: ExecuteBash
+        timeoutSeconds: 5400
+        onFailure: Abort
+        maxAttempts: 10
+        inputs:
+          commands:
+            - /tmp/scripts/upgradeServer.sh
+
+      - name: EnableFIPS
+        action: ExecuteBash
+        timeoutSeconds: 1800
+        onFailure: Abort
+        maxAttempts: 3
+        inputs:
+          commands:
+            - /tmp/scripts/enableFIPS.sh
+
+      - name: RebootServerToApplyFips 
+        action: Reboot 
+        inputs: 
+          delaySeconds: 60
+
+      - name: RunHardeningScript
+        action: ExecuteBash
+        timeoutSeconds: 5400
+        onFailure: Abort
+        maxAttempts: 10
+        inputs:
+          commands:
+            - /tmp/scripts/runHardeningScript.sh
+
+      - name: RemoveGit
+        action: ExecuteBash
+        timeoutSeconds: 5400
+        onFailure: Abort
+        maxAttempts: 10
+        inputs:
+          commands:
+            - dnf remove git -y 
+            - dnf autoremove -y 
+
+      - name: RunOpenScap
+        action: ExecuteBash
+        timeoutSeconds: 5400
+        onFailure: Abort
+        maxAttempts: 10
+        inputs:
+          commands:
+            - /tmp/scripts/runOpenScapScan.sh
+
+      # - name: UploadOpenScaptoS3
+      #   action: S3Upload
+      #   onFailure: Continue
+      #   maxAttempts: 3
+      #   inputs:
+      #     - source: "/tmp/oscap-results/*"
+      #       destination: "s3://d-image-scans/openscap/reports/"

@@ -1,0 +1,77 @@
+name: 'Install-DoD-Certificates'
+description: 'Downloads and installs DoD and WCF Certificates securely from cyber.mil'
+schemaVersion: 1.0
+
+phases:
+  - name: build
+    steps:
+      - name: InstallDoDCerts
+        action: ExecuteBash
+        inputs:
+          commands:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              echo "=== Downloading and Installing DoD Certificates ==="
+              
+              # Ensure dependencies are installed using DNF
+              dnf install -y unzip openssl ca-certificates
+              
+              DOD_URL="https://dl.dod.cyber.mil/wp-content/uploads/pki-pke/zip/unclass-certificates_pkcs7_DoD.zip"
+              WCF_URL="https://dl.dod.cyber.mil/wp-content/uploads/pki-pke/zip/unclass-certificates_pkcs7_WCF.zip"
+              TRUST_ANCHORS="/etc/pki/ca-trust/source/anchors"
+              
+              # Ensure the trust anchors directory exists
+              mkdir -p "$TRUST_ANCHORS"
+              
+              # Download the certificate bundles with robust retries
+              curl -L -o /tmp/unclass-certificates_pkcs7_DoD.zip \
+                --connect-timeout 30 \
+                --max-time 300 \
+                --retry 3 \
+                --retry-delay 5 \
+                --fail \
+                "$DOD_URL"
+              
+              curl -L -o /tmp/unclass-certificates_pkcs7_WCF.zip \
+                --connect-timeout 30 \
+                --max-time 300 \
+                --retry 3 \
+                --retry-delay 5 \
+                --fail \
+                "$WCF_URL"
+              
+              if ls /tmp/unclass-certificates* 1> /dev/null 2>&1; then
+                  echo "[+] Certificates successfully downloaded."
+              else
+                  echo "[ERROR] Failed to download DoD certificates"
+                  exit 1
+              fi
+              
+              # Extract the certificates into isolated folders
+              mkdir -p /tmp/dod_extract /tmp/wcf_extract
+              unzip -q /tmp/unclass-certificates_pkcs7_DoD.zip -d /tmp/dod_extract
+              unzip -q /tmp/unclass-certificates_pkcs7_WCF.zip -d /tmp/wcf_extract
+              
+              # Convert DoD to PEM (Using find to handle dynamic version names)
+              DOD_P7B=$(find /tmp/dod_extract -name "*.pem.p7b" | head -n 1)
+              echo "[+] Converting $DOD_P7B to PEM..."
+              openssl pkcs7 -print_certs -in "$DOD_P7B" -out /tmp/dod_extract/DoD_Certs.pem
+              cp /tmp/dod_extract/DoD_Certs.pem "$TRUST_ANCHORS/DoD_Certs.pem"
+              
+              # Convert WCF to PEM (Using find to handle dynamic version names)
+              WCF_P7B=$(find /tmp/wcf_extract -name "*.pem.p7b" | head -n 1)
+              echo "[+] Converting $WCF_P7B to PEM..."
+              openssl pkcs7 -print_certs -in "$WCF_P7B" -out /tmp/wcf_extract/WCF_Certs.pem
+              cp /tmp/wcf_extract/WCF_Certs.pem "$TRUST_ANCHORS/WCF_Certs.pem"
+              
+              # Update the CA trust store
+              echo "[+] Updating system CA trust store..."
+              update-ca-trust force-enable
+              update-ca-trust extract
+              
+              # Cleanup
+              rm -rf /tmp/unclass-certificates* /tmp/dod_extract /tmp/wcf_extract
+              
+              echo "[SUCCESS] DoD certificates installed from official source"
+

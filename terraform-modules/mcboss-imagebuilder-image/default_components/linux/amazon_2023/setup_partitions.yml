@@ -1,0 +1,149 @@
+name: 'Setup-LVM-Partitions'
+description: 'Partitions secondary EBS volume and migrates system directories to LVM'
+schemaVersion: 1.0
+
+phases:
+  - name: build
+    steps:
+      - name: ConfigureLVM
+        action: ExecuteBash
+        inputs:
+          commands:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              
+              echo "===== LVM Setup script initiated ====="
+              
+              if ! command -v rsync &>/dev/null; then
+                echo "Installing rsync..."
+                dnf install -y rsync
+              fi
+              
+              if [[ -e /dev/vg_var/lv_var ]]; then
+                echo "lv_var LV exists. Assuming LVM script has already executed. Exiting."
+                exit 0
+              fi
+              
+              echo "Setting SELinux to permissive..."
+              setenforce 0 || echo "SELinux not enabled or already permissive."
+              
+              echo "Stopping chronyd, crond, and tuned..."
+              for svc in chronyd crond tuned; do
+                if systemctl list-unit-files | grep -q "^$${svc}\.service"; then
+                  systemctl stop "$${svc}" || true
+                fi
+              done
+              
+              # AWS Nitro Auto-Detect Disk Logic
+              DISK="/dev/sdb"
+              if [[ ! -b "$${DISK}" ]]; then
+                if [[ -b "/dev/nvme1n1" ]]; then
+                  DISK="/dev/nvme1n1"
+                elif [[ -b "/dev/xvdf" ]]; then
+                  DISK="/dev/xvdf"
+                else
+                  echo "ERROR: Secondary disk not found! Available disks:"
+                  lsblk
+                  exit 1
+                fi
+              fi
+              
+              echo "Using disk: $${DISK}"
+              
+              echo "Creating Physical Volume and Volume Group..."
+              if ! pvs | grep -q "$${DISK}"; then pvcreate "$${DISK}"; fi
+              if ! vgs | grep -q "vg_var"; then vgcreate vg_var "$${DISK}"; fi
+              
+              declare -A LVS_FIXED=(
+                [lv_var]=50G
+                [lv_log]=20G
+                [lv_vartmp]=20G
+                [lv_audit]=20G
+                [lv_home]=20G
+              )
+              LV_LAST="lv_tmp"
+              
+              echo "Creating fixed-size Logical Volumes..."
+              for lv in "$${!LVS_FIXED[@]}"; do
+                if ! lvs | grep -q "$${lv}"; then
+                  lvcreate -n "$${lv}" -L "$${LVS_FIXED[$${lv}]}" vg_var
+                fi
+              done
+              
+              if ! lvs | grep -q "$${LV_LAST}"; then
+                lvcreate -n "$${LV_LAST}" -l 100%FREE vg_var
+              fi
+              
+              echo "Creating XFS File Systems..."
+              for lv in "$${!LVS_FIXED[@]}"; do
+                if ! blkid "/dev/vg_var/$${lv}" >/dev/null 2>&1; then mkfs.xfs "/dev/vg_var/$${lv}"; fi
+              done
+              if ! blkid "/dev/vg_var/$${LV_LAST}" >/dev/null 2>&1; then mkfs.xfs "/dev/vg_var/$${LV_LAST}"; fi
+              
+              echo "Temporary mounts & Migrating Data..."
+              for dir in var log vartmp audit home tmp; do mkdir -p "/mnt/$${dir}"; done
+              
+              mount /dev/vg_var/lv_var /mnt/var
+              mount /dev/vg_var/lv_log /mnt/log
+              mount /dev/vg_var/lv_vartmp /mnt/vartmp
+              mount /dev/vg_var/lv_audit /mnt/audit
+              mount /dev/vg_var/lv_home /mnt/home
+              mount "/dev/vg_var/$${LV_LAST}" /mnt/tmp
+              
+              chmod 0750 /mnt/audit
+              chmod 1777 /mnt/tmp
+              
+              RSYNC_EXCLUDE_ARGS=(--exclude "log/*" --exclude "/proc/*" --exclude "/sys/*" --exclude "/run/*" --exclude "/dev/*" --exclude "/var/lib/nfs/rpc_pipefs")
+              
+              rsync -aAX "$${RSYNC_EXCLUDE_ARGS[@]}" /var/ /mnt/var/
+              rsync -aAX "$${RSYNC_EXCLUDE_ARGS[@]}" /var/log/ /mnt/log/
+              rsync -aAX /var/log/audit/ /mnt/audit/
+              rsync -aAX "$${RSYNC_EXCLUDE_ARGS[@]}" /home/ /mnt/home/
+              rsync -aAX "$${RSYNC_EXCLUDE_ARGS[@]}" /tmp/ /mnt/tmp/
+              
+              umount /mnt/{var,log,vartmp,audit,home,tmp}
+              
+              echo "Mounting new LVs to live directories..."
+              mount -t xfs /dev/vg_var/lv_var /var
+              mount -t xfs /dev/vg_var/lv_log /var/log
+              mount -t xfs /dev/vg_var/lv_vartmp /var/tmp
+              mount -t xfs /dev/vg_var/lv_audit /var/log/audit
+              mount -t xfs /dev/vg_var/lv_home /home
+              mount -t xfs "/dev/vg_var/$${LV_LAST}" /tmp
+              
+              echo "Updating /etc/fstab..."
+              for entry in \
+              "/dev/vg_var/lv_var      /var            xfs defaults 0 0" \
+              "/dev/vg_var/lv_log      /var/log        xfs defaults 0 0" \
+              "/dev/vg_var/lv_vartmp   /var/tmp        xfs defaults 0 0" \
+              "/dev/vg_var/lv_audit    /var/log/audit  xfs defaults 0 0" \
+              "/dev/vg_var/lv_home     /home           xfs defaults 0 0" \
+              "/dev/vg_var/$${LV_LAST}    /tmp            xfs defaults 0 0"
+              do
+                if ! grep -qF "$${entry}" /etc/fstab; then echo "$${entry}" | tee -a /etc/fstab >/dev/null; fi
+              done
+              
+              echo "Applying SELinux relabels..."
+              sed -i 's/^# use_devicesfile = 1/use_devicesfile = 0/' /etc/lvm/lvm.conf
+              restorecon -Rv /var /home /tmp /etc
+              
+              chmod 0750 /var/log/audit
+              chmod 1777 /tmp
+              setenforce 1 || echo "SELinux not enabled."
+              
+              echo "Cleaning up old directories..."
+              mkdir -p /mnt/root /mnt/empty
+              mount -o bind / /mnt/root
+              for dir in /mnt/root/var /mnt/root/home /mnt/root/tmp; do
+                if [[ -d "$${dir}" ]]; then find "$${dir}" -mindepth 1 -maxdepth 1 ! -mount -exec rm -rf {} + ; fi
+              done
+              umount /mnt/root || true
+              rm -rf /mnt/*
+              
+              echo "Restarting services..."
+              for svc in chronyd crond tuned; do
+                if systemctl list-unit-files | grep -q "^$${svc}\.service"; then systemctl start "$${svc}" || true; fi
+              done
+              
+              echo "LVM Cleanup complete!"

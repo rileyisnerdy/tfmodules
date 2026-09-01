@@ -1,0 +1,40 @@
+
+### FIRST PASS
+#imagebuilder_eks_debug_components_map = {
+#                                ### IF this is assumable, then we can use default of: "${var.imagebuilder_eks_debug_config_path}/components/"
+#                                ### otherwise we support override of all component object keys
+#        "install_dod_certs"   = { path    = "components/install_dod_certs.yml" }
+#        "enable_fips"         = { path    = "components/enable_fips.yml" }
+#        "setup_partitions"    = { path    = "components/setup_partitions.yml" }
+#        "oscap_scan"          = { path    = "components/oscap_scan.yml" }
+#        "install_dod_certs"   = { path    = "components/install_dod_certs.yml" }
+#        "force_failure"       = { path    = "components/force_failure.yml" }
+#
+#        "aws:component/stig-build-linux/x.x.x"= { parameters    = [{ name = "Level", value = "High" }] }
+#}
+
+
+### MINIMAL
+#imagebuilder_eks_debug_components_map = {
+#        ###     "example_component" = { path = "tfroot/level/path/to/example_component.yml", name = "the-best-component", version = "7.7.7" , parameters = [{ name = "Key", value = "Value" }]}
+#
+#        ### CUSTOMS: IF this is assumable, and no "aws:component/" prefixed string is present
+#        ###     then we set 'path' with default of: "${var.imagebuilder_eks_debug_config_path}/components/${component.key}.yml"
+#        ###     otherwise we support override of all component object keys
+#
+#
+#        "install_dod_certs"   = {}
+#        "enable_fips"         = {}
+#        "setup_partitions"    = {}
+#        "oscap_scan"          = {}
+#        "install_dod_certs"   = {}
+#        "force_failure"       = {}
+#
+#        ### MANAGED: IF this is true, and KEY starts with "aws:component/"
+#        ###     then use it as 'arn'
+#
+#        "aws:component/stig-build-linux/x.x.x" = { parameters    = [{ name = "Level", value = "High" }] }
+#}
+
+
+imagebuilder_eks_debug_recipe_version

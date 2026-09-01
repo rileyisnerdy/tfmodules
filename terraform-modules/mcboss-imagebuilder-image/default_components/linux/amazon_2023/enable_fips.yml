@@ -1,0 +1,76 @@
+name: 'Enable-Verify-FIPS-Mode'
+description: 'Enables FIPS 140-3, configures OpenSCAP files, reboots, and verifies kernel state'
+schemaVersion: 1.0
+
+phases:
+  - name: build
+    steps:
+      - name: EnableFIPS
+        action: ExecuteBash
+        inputs:
+          commands:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              
+              if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null || echo 0)" == "1" ]; then
+                echo "[+] FIPS is already active. Skipping enablement."
+                exit 0
+              fi
+              
+              echo "[+] Installing FIPS utilities and Dracut FIPS modules..."
+              dnf install -y crypto-policies-scripts dracut-fips
+              hash -r || true
+              
+              echo "[+] Enabling FIPS mode (Headless)..."
+              set +e 
+              yes | /usr/bin/fips-mode-setup --enable
+              FIPS_EXIT=$?
+              set -e
+              
+              if [ $FIPS_EXIT -ne 0 ] && [ $FIPS_EXIT -ne 141 ]; then
+                echo "[-] fips-mode-setup failed! Exit Code: $FIPS_EXIT"
+                exit $FIPS_EXIT
+              fi
+              
+              echo "[+] Forcing fips=1 into AL2023 BLS boot entries..."
+              grubby --update-kernel=ALL --args="fips=1"
+              
+              echo "[+] Hardcoding Dracut FIPS configuration for OpenSCAP scanner..."
+              # Append directly to the main config file instead of the .d directory
+              if ! grep -q "add_dracutmodules+=\" fips \"" /etc/dracut.conf; then
+                echo 'add_dracutmodules+=" fips "' >> /etc/dracut.conf
+              fi
+              
+              echo "[+] Hardcoding sysctl fips_enabled for OpenSCAP scanner..."
+              echo "crypto.fips_enabled = 1" > /etc/sysctl.d/40-fips.conf
+              
+              echo "[+] Rebuilding initramfs..."
+              dracut -f
+              
+              echo "[+] Initiating Hard Reboot to enforce FIPS kernel..."
+              # Start a background reboot delayed by 15 seconds
+              nohup bash -c "sleep 15 && shutdown -r now" &
+              
+              # Signal AWS to pause the current step and wait for reconnection
+              exit 194
+              
+      # --- IMAGE BUILDER WILL RESUME EXACTLY HERE AFTER REBOOT ---
+      - name: VerifyFIPSKernel
+        action: ExecuteBash
+        inputs:
+          commands:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              
+              # Give SSM a moment to stabilize post-reboot
+              sleep 15
+              
+              echo "[+] Verifying active kernel FIPS state post-reboot..."
+              if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null || echo 0)" == "1" ]; then
+                echo "[SUCCESS] Kernel is actively running in FIPS mode!"
+              else
+                echo "[ERROR] Kernel did not boot into FIPS mode!"
+                exit 1
+              fi

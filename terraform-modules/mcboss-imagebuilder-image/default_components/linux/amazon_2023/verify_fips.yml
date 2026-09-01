@@ -1,0 +1,23 @@
+name: 'Verify-FIPS-Mode'
+description: 'Verifies the kernel is running in FIPS mode post-reboot'
+schemaVersion: 1.0
+
+phases:
+  - name: build
+    steps:
+      - name: VerifyFIPSKernel
+        action: ExecuteBash
+        inputs:
+          commands:
+            - |
+              #!/bin/bash
+              # Give SSM agent time to stabilize post-reboot
+              sleep 30
+              set -euo pipefail
+              echo "[+] Verifying active kernel FIPS state post-reboot..."
+              if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null || echo 0)" == "1" ]; then
+                echo "[SUCCESS] Kernel is actively running in FIPS mode!"
+              else
+                echo "[ERROR] Kernel did not boot into FIPS mode!"
+                exit 1
+              fi

@@ -1,0 +1,102 @@
+name: 'Run-OpenSCAP-Scan'
+description: 'Runs compliance scan, prints summary, and uploads OVAL/HTML reports to secure S3 bucket'
+schemaVersion: 1.0
+
+phases:
+  - name: build
+    steps:
+      - name: RunOpenSCAP
+        action: ExecuteBash
+        onFailure: Continue 
+        inputs:
+          commands:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              
+              echo "[+] Installing OpenSCAP and Security Guide..."
+              dnf install -y openscap-scanner openscap-utils scap-security-guide jq
+              
+              # Notice the double $$ to escape bash variables from Terraform templatefile()
+              OSCAP_PROFILE="xccdf_org.ssgproject.content_profile_stig" 
+              TARGET_OS="al2023"
+              DS_FILE="/usr/share/xml/scap/ssg/content/ssg-$${TARGET_OS}-ds.xml"
+              
+              RESULTS_DIR="/var/log/oscap-results"
+              mkdir -p "$${RESULTS_DIR}"
+              
+              TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+              REPORT="$${RESULTS_DIR}/report-$${TARGET_OS}-$${TIMESTAMP}.html"
+              ARF="$${RESULTS_DIR}/results-$${TARGET_OS}-$${TIMESTAMP}.arf"
+              RESULTS_TXT="$${RESULTS_DIR}/results-$${TARGET_OS}-$${TIMESTAMP}.txt"
+              
+              if [ -f "$${DS_FILE}" ]; then
+                echo "[+] Running OpenSCAP scan..."
+                set +e
+                # ADDED --oval-results flag to generate the deep debugging XML files
+                oscap xccdf eval \
+                    --profile "$${OSCAP_PROFILE}" \
+                    --fetch-remote-resources \
+                    --results-arf "$${ARF}" \
+                    --report "$${REPORT}" \
+                    --oval-results \
+                    "$${DS_FILE}" 2>&1 | tee "$${RESULTS_TXT}"
+                OSCAP_EXIT_CODE="$${?}"
+                set -e
+                
+                if [ "$${OSCAP_EXIT_CODE}" -eq 0 ] || [ "$${OSCAP_EXIT_CODE}" -eq 2 ]; then
+                  echo "[+] Scan completed successfully."
+                else
+                  echo "[-] FATAL ERROR: OpenSCAP failed (Exit Code: $${OSCAP_EXIT_CODE})."
+                  exit "$${OSCAP_EXIT_CODE}"
+                fi
+                
+                echo "--------------------------------------------------------"
+                echo "[+] SCAN SUMMARY (FAILURES ONLY):"
+                echo "--------------------------------------------------------"
+                grep -iE "\s+fail$" "$${RESULTS_TXT}" || echo "No failures found!"
+                echo "--------------------------------------------------------"
+                
+                PASS_COUNT=$(grep -o '<result>pass</result>' "$${ARF}" | wc -l || echo 0)
+                FAIL_COUNT=$(grep -o '<result>fail</result>' "$${ARF}" | wc -l || echo 0)
+                NA_COUNT=$(grep -o '<result>notapplicable</result>' "$${ARF}" | wc -l || echo 0)
+                TOTAL=$(($PASS_COUNT + $FAIL_COUNT))
+                
+                echo "[+] FINAL COMPLIANCE STATISTICS:"
+                if [ "$${TOTAL}" -gt 0 ]; then
+                  PERCENTAGE=$(awk "BEGIN {printf \"%.2f\", ($${PASS_COUNT}/$${TOTAL})*100}")
+                  echo "    Passed                 : $${PASS_COUNT}"
+                  echo "    Failed                 : $${FAIL_COUNT}"
+                  echo "    Not Applicable         : $${NA_COUNT}"
+                  echo "    ---------------------------------"
+                  echo "    Compliance Percentage  : $${PERCENTAGE}%"
+                else
+                  echo "    Could not calculate percentage. Total evaluated rules: 0"
+                fi
+                echo "--------------------------------------------------------"
+                
+                # --- S3 UPLOAD LOGIC ---
+                TF_BUCKET_NAME="${audit_bucket_name}"
+                echo "TF_BUCKET_NAME = $${TF_BUCKET_NAME}"
+                
+                if [ -n "$${TF_BUCKET_NAME}" ]; then
+                  echo "[+] Uploading HTML, ARF, and OVAL reports to secure S3 bucket ($${TF_BUCKET_NAME})..."
+                  aws s3 cp "$${REPORT}" "s3://$${TF_BUCKET_NAME}/scap-reports/$${REPORT##*/}"
+                  aws s3 cp "$${ARF}" "s3://$${TF_BUCKET_NAME}/scap-reports/$${ARF##*/}"
+                  
+                  # ADDED: Upload any OVAL result files generated for deep debugging
+                  for oval_file in "$${RESULTS_DIR}"/*.oval.xml; do
+                    if [ -f "$${oval_file}" ]; then
+                      aws s3 cp "$${oval_file}" "s3://$${TF_BUCKET_NAME}/scap-reports/$${oval_file##*/}"
+                    fi
+                  done
+                  
+                  echo "[SUCCESS] Upload complete!"
+                else
+                  echo "[-] Audit bucket variable not provided by Terraform. Skipping S3 upload."
+                fi
+                
+              else
+                echo "[-] ERROR: Datastream file $${DS_FILE} not found!"
+                exit 1
+              fi

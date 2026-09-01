@@ -1,0 +1,2 @@
+rule_id,sg_name,type,protocol,from_port,to_port,cidr_ipv4,cidr_ipv6,source_sg_name,prefix_list_id,description
+imagebuilder_${image_name}_egress_tcp_443_all,imagebuilder_${image_name},egress,tcp,443,443,0.0.0.0/0,,,,HTTPS(tcp/443) from imagebuilder_${image_name} to all

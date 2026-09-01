@@ -1,0 +1,5 @@
+module "input_validation" {
+        source = "./input_validation"
+
+        bucket_name = ""
+}

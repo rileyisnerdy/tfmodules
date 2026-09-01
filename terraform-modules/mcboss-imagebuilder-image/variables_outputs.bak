@@ -1,0 +1,31 @@
+output "image_recipe_arn" {
+  description = "ARN of the Image Recipe"
+  value       = aws_imagebuilder_image_recipe.this.arn
+}
+
+output "infrastructure_config_arn" {
+  description = "ARN of the Infrastructure Configuration"
+  value       = aws_imagebuilder_infrastructure_configuration.this.arn
+}
+
+output "security_group_ids" {
+  description = "The complete list of Security Group IDs used by the Image Builder"
+  value       = concat([module.ppsm.security_groups[*].id], var.additional_security_group_ids)
+}
+
+output "instance_profile_name" {
+  description = "The name of the instance profile"
+  value       =  aws_iam_instance_profile.this.name 
+}
+
+
+
+
+
+output "merged_components_list" {
+        value = local.merged_components_list
+}
+
+output "prepared_components_list" {
+        value = local.prepared_components_list
+}

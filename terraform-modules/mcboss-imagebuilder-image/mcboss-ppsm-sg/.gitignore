@@ -1,0 +1,47 @@
+### https://developer.hashicorp.com/terraform/language/style
+###
+###
+### Terraform #####################################################################################################################################
+# Local '.terraform' runtime cache directories
+.terraform/*
+**/.terraform/*
+
+### State Files, Backups
+*.tfstate
+*.tfstate.*
+*.tfstate.backup.tf
+*.tfvars
+*.terraform.json
+*.terraform
+
+### TFVARs files
+terraform.tfvars
+*terraform.tfvars
+
+### Terraform CLI Config
+*.terraformrc
+.terraformrc
+*.terraform.tfrc
+.terraform.tfrc
+
+### Plan Output Files
+plan.out
+
+### Modules #####################################################################################################################################
+### (GitOps decoupled, and their working directory symlinks too)
+acme-iac-backend
+acme-iac-backend/*
+
+
+
+
+
+### Operating System Artifacts #####################################################################################################################################
+###     Mac OSX 
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+
+
+

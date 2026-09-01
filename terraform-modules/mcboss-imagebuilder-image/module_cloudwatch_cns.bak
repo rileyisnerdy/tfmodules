@@ -1,0 +1,30 @@
+module "cloudwatch_logs_cns_imagebuilder" {
+        source = "git::ssh://git@git.acme.usmc.mil/terraform-modules/acme-cloudwatch-cns.git?ref=v1.1.0"
+
+        account_application       = local.account_application
+        account_environment       = local.account_environment
+        log_source_cns            = "imagebuilder"
+        cns_identifier            = local.rds_mssql_db_identifier
+}
+
+#####################################################################################################################################################
+#       data "aws_cloudwatch_log_groups" "source_cns" {
+#               log_group_name_prefix = "/aws/${var.log_source_cns}"
+#       }
+
+###### EC2 Image Builder (CI/CD Pipeline Logs) ######################################################################################################
+#Image Builder writes logs under multiple namespaces depending on component type and action.
+
+#           ###### Predictable log groups include:
+#           /aws/imagebuilder/<component-type>
+#           /aws/imagebuilder/<pipeline-name>
+#           /aws/imagebuilder/<image-build-version>
+#       
+#           ###### Common component-types observed in the wild:
+#           /aws/imagebuilder/component
+#           /aws/imagebuilder/recipe
+#           /aws/imagebuilder/image
+#           /aws/imagebuilder/container
+#       
+#           ###### Pipeline execution examples:
+#           /aws/imagebuilder/pipeline/<pipeline-name>
