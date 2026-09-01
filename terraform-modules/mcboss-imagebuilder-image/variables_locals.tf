@@ -110,9 +110,11 @@ locals {
   }
 
   # Rendered once so the hash covers exactly what gets uploaded.
+  # Always templatefile, even with no vars: the documents rely on it to collapse
+  # their $${...} escapes back to ${...} for bash.
   component_docs = {
     for c, f in local.component_files :
-    c => length(local.merged_components_list[c].parameters) > 0 ? templatefile(f, local.merged_components_list[c].parameters) : file(f)
+    c => templatefile(f, local.merged_components_list[c].parameters)
   }
 
   component_hashes = { for c, doc in local.component_docs : c => md5(doc) }

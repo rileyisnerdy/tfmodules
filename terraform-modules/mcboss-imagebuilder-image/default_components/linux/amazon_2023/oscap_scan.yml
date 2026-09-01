@@ -2,6 +2,12 @@ name: 'Run-OpenSCAP-Scan'
 description: 'Runs compliance scan, prints summary, and uploads OVAL/HTML reports to secure S3 bucket'
 schemaVersion: 1.0
 
+parameters:
+  - audit_bucket_name:
+      type: string
+      default: ''
+      description: 'S3 bucket that scan reports are uploaded to'
+
 phases:
   - name: build
     steps:
@@ -76,7 +82,7 @@ phases:
                 echo "--------------------------------------------------------"
                 
                 # --- S3 UPLOAD LOGIC ---
-                TF_BUCKET_NAME="${audit_bucket_name}"
+                TF_BUCKET_NAME="{{ audit_bucket_name }}"
                 echo "TF_BUCKET_NAME = $${TF_BUCKET_NAME}"
                 
                 if [ -n "$${TF_BUCKET_NAME}" ]; then

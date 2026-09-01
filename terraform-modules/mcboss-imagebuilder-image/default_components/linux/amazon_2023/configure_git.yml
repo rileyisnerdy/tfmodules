@@ -37,7 +37,7 @@ phases:
             CRED_FILE="$GIT_CONFIG_DIR/git-credentials"
 
             cat <<EOF > "$CRED_FILE"
-            https://${GITLAB_USERNAME}:${GITLAB_PASSWORD}@git.acme.usmc.mil
+            https://$${GITLAB_USERNAME}:$${GITLAB_PASSWORD}@git.acme.usmc.mil
             EOF
 
             # Tell git to use this config and credentials file
