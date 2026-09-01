@@ -1,6 +1,6 @@
 resource "aws_s3_bucket" "audit" {
         ### FIXME: ADD TOGGLE FOR IF-INCLUDED IN SPECIFIC COMPONENT
-        bucket        = "${lower(replace(var.globals["aws_resource_nametag_prefix"], "_", "-"))}-imagebuilder-${lower(replace(var.image_name, "_", "-"))}-audit" #var.audit_bucket_name ### Make this a bucket per pipeline so that the bucket policy can effectively self manage
+        bucket        = local.audit_bucket_name ### defined in variables_locals.tf; bucket per pipeline so the bucket policy can effectively self manage
         force_destroy = false ### FIXME Convert to toggle variable
 }
 

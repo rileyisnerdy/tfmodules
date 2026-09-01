@@ -1,6 +1,12 @@
 locals {
         default_components_config_path = "${path.module}/default_components/linux/amazon_2023"
 
+        ### Deterministic audit bucket name.
+        ### Derived purely from input variables (NOT from aws_s3_bucket.audit.id) so that any local
+        ### feeding a for_each / dynamic block stays known at plan time. Must stay in sync with the
+        ### bucket argument in component_s3_bucket_audit.tf, which references this same local.
+        audit_bucket_name = "${lower(replace(var.globals["aws_resource_nametag_prefix"], "_", "-"))}-imagebuilder-${lower(replace(var.image_name, "_", "-"))}-audit"
+
         ### Ansible CIS Pipeline uses gitlab repo to store scripts for use in the pipeline
         ### https://ansible-lockdown.readthedocs.io/en/latest/CIS/CIS_table.html
         default_components_cis = {
@@ -8,7 +14,7 @@ locals {
                 ### otherwise we support override of all component object keys
                 "100_install_dod_certs"   = { path    = "install_dod_certs.yml" }
                 "200_configure_git"       = { path    = "configure_git.yml", parameters = {} }
-                "300_oscap_scan"          = { path    = "oscap_scan.yml" ,parameters = { audit_bucket_name = aws_s3_bucket.audit.id}}
+                "300_oscap_scan"          = { path    = "oscap_scan.yml" ,parameters = { audit_bucket_name = local.audit_bucket_name}}
         }
 
         default_components_aws = {
@@ -16,7 +22,7 @@ locals {
                 "200_enable_fips"         = { path    = "enable_fips.yml" }
                 "300_setup_partitions"    = { path    = "setup_partitions.yml" }
                 "400_aws_al2023_stig"     = { name = "aws:component/stig-build-linux/x.x.x",  parameters    = { Level = "High" } }
-                "500_oscap_scan"          = { path    = "oscap_scan.yml", parameters = { audit_bucket_name = aws_s3_bucket.audit.id } }
+                "500_oscap_scan"          = { path    = "oscap_scan.yml", parameters = { audit_bucket_name = local.audit_bucket_name } }
         }
 
         default_components_awsdebug = {
@@ -24,7 +30,7 @@ locals {
                 "200_enable_fips"         = { path    = "enable_fips.yml" }
                 "300_setup_partitions"    = { path    = "setup_partitions.yml" }
                 "400_aws_al2023_stig"     = { name = "aws:component/stig-build-linux/x.x.x", parameters    = { Level= "High" } }
-                "500_oscap_scan"          = { path    = "oscap_scan.yml", parameters = { audit_bucket_name = aws_s3_bucket.audit.id } }
+                "500_oscap_scan"          = { path    = "oscap_scan.yml", parameters = { audit_bucket_name = local.audit_bucket_name } }
                 "600_force_failure"       = { path    = "force_failure.yml" }
         }
 
