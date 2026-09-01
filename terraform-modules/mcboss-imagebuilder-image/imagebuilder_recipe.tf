@@ -1,7 +1,10 @@
 resource "aws_imagebuilder_image_recipe" "this" {
         name         = "${var.globals["aws_resource_nametag_prefix"]}_${var.image_name}"
         parent_image = local.recipe_parent_image
-        version      = var.recipe_version
+        version      = local.recipe_version
+
+        ### Read back on the next plan to decide whether to hold or bump the patch.
+        tags = { content_md5 = local.recipe_hash }
 
         lifecycle {
                 create_before_destroy = true

@@ -71,20 +71,6 @@ locals {
 
 
 
-data "aws_imagebuilder_image_recipe" "example" {
-  arn = "arn:aws-us-gov:imagebuilder:us-gov-west-1:205415787579:image-recipe/dev-mbct-eks-stig-build-linux/x.x.x"
-}
-
-output "aws_imagebuilder_image_recipe_version" {
-        value = data.aws_imagebuilder_image_recipe.example.version
-}
-
-locals {
-        historical_recipe_version_found = ( data.aws_imagebuilder_image_recipe.example.version != "" ? (length(regexall("\\d+\\.\\d+\\.\\d+", data.aws_imagebuilder_image_recipe.example.version)) > 0 ? data.aws_imagebuilder_image_recipe.example.version : "${var.recipe_version}.0") : "${var.recipe_version}.0" )
-        historical_recipe_major_number = tonumber(split( ".", ( local.historical_recipe_version_found ) )[0])
-        historical_recipe_minor_number = tonumber(split( ".", ( local.historical_recipe_version_found ) )[1])
-        historical_recipe_build_number = tonumber(split( ".", ( local.historical_recipe_version_found ) )[2])
-}
 
 
 
@@ -206,7 +192,7 @@ locals {
                                                                 
 
                                                                 arn  = ( local.is_managed[component] ? "arn:aws-us-gov:imagebuilder:${var.globals["region"]}:${attribute.name}" 
-                                                                                                     : "arn:aws-us-gov:imagebuilder:${var.globals["region"]}:${var.globals["account_id"]}:component/${lower(replace("${var.globals["aws_resource_nametag_prefix"]}_${var.image_name}_${substr(component, 4, -1)}", "_", "-"))}/${attribute.version != "" ? attribute.version : var.recipe_version}" )
+                                                                                                     : "arn:aws-us-gov:imagebuilder:${var.globals["region"]}:${var.globals["account_id"]}:component/${local.component_names[component]}/${local.component_versions[component]}" )
                                                                                                                                         
                                                                 path               = local.is_managed[component] ? "" : local.component_files[component]
 
@@ -263,4 +249,69 @@ output "prepared_components_list" {
 
 output "default_components" {
         value = local.default_components
+}
+
+
+locals {
+  recipe_name = "${var.globals["aws_resource_nametag_prefix"]}_${var.image_name}"
+
+  # A recipe version is immutable, so any change here needs a new version.
+  # block_device_mapping is excluded because the resource ignores changes to it.
+  # nonsensitive: parent_image comes from SSM, which marks every value sensitive.
+  recipe_payload = {
+    parent_image = nonsensitive(local.recipe_parent_image)
+    components = [
+      for c in sort(keys(local.prepared_components_list)) : {
+        arn        = local.prepared_components_list[c].arn
+        parameters = local.prepared_components_list[c].parameters
+      }
+    ]
+  }
+
+  recipe_hash = md5(jsonencode(local.recipe_payload))
+
+  recipe_line = length(regexall("^\\d+\\.\\d+\\.\\d+$", var.recipe_version)) > 0 ? "${split(".", var.recipe_version)[0]}.${split(".", var.recipe_version)[1]}" : "1.0"
+}
+
+data "aws_imagebuilder_image_recipes" "historical_versions" {
+  owner = "Self"
+}
+
+locals {
+  # ARN: arn:...:image-recipe/<name>/<major>.<minor>.<patch>. No build node.
+  published_recipes = [
+    for arn in data.aws_imagebuilder_image_recipes.historical_versions.arns : {
+      arn   = arn
+      name  = split("/", arn)[1]
+      line  = "${split(".", split("/", arn)[2])[0]}.${split(".", split("/", arn)[2])[1]}"
+      patch = tonumber(split(".", split("/", arn)[2])[2])
+    }
+    if length(split("/", arn)) == 3
+  ]
+
+  # Newest recipe as "patch|arn", or "" if never published.
+  newest_recipe = try(reverse(sort([
+    for r in local.published_recipes : format("%09d|%s", r.patch, r.arn)
+    if r.name == local.recipe_name && r.line == local.recipe_line
+  ]))[0], "")
+
+  published_recipe_patch = local.newest_recipe == "" ? -1 : tonumber(split("|", local.newest_recipe)[0])
+  published_recipe_arn   = local.newest_recipe == "" ? "" : split("|", local.newest_recipe)[1]
+}
+
+data "aws_imagebuilder_image_recipe" "published" {
+  count = local.published_recipe_arn == "" ? 0 : 1
+
+  arn = local.published_recipe_arn
+}
+
+locals {
+  recipe_changed = local.published_recipe_arn == "" || try(data.aws_imagebuilder_image_recipe.published[0].tags["content_md5"], "") != local.recipe_hash
+
+  # var.recipe_version supplies major.minor. The patch is managed here.
+  recipe_version = local.recipe_changed ? "${local.recipe_line}.${local.published_recipe_patch + 1}" : "${local.recipe_line}.${local.published_recipe_patch}"
+}
+
+output "recipe_version" {
+  value = local.recipe_version
 }
