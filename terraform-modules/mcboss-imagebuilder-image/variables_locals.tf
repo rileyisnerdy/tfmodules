@@ -82,7 +82,6 @@ data "aws_imagebuilder_components" "historical_versions" {
 
 locals {
         historical_aws_imagebuilder_components = [ for arn in data.aws_imagebuilder_components.historical_versions.arns : arn if length(regexall("component/", arn)) > 0 ]
-        latest_component_versions =  { for comp_name, versions in { for arn in data.aws_imagebuilder_components.historical_versions.arns : split("/", arn)[1] => arn... } : comp_name => ( sort([ for arn in versions : split("/", arn)[2] ])[length(versions)-1] ) }
 }
 ## 2. Filter the output to find all versions of a specific component by name
 #output "historical_aws_imagebuilder_components" {
@@ -131,14 +130,27 @@ locals {
   # ARN: arn:...:component/<name>/<major>.<minor>.<patch>/<build>
   published_builds = [
     for arn in data.aws_imagebuilder_components.historical_versions.arns : {
-      arn   = arn
-      name  = split("/", arn)[1]
-      line  = "${split(".", split("/", arn)[2])[0]}.${split(".", split("/", arn)[2])[1]}"
-      patch = tonumber(split(".", split("/", arn)[2])[2])
-      build = tonumber(split("/", arn)[3])
+      arn     = arn
+      name    = split("/", arn)[1]
+      version = split("/", arn)[2]
+      line    = "${split(".", split("/", arn)[2])[0]}.${split(".", split("/", arn)[2])[1]}"
+      major   = tonumber(split(".", split("/", arn)[2])[0])
+      minor   = tonumber(split(".", split("/", arn)[2])[1])
+      patch   = tonumber(split(".", split("/", arn)[2])[2])
+      build   = tonumber(split("/", arn)[3])
     }
     if length(split("/", arn)) == 4
   ]
+
+  # Highest published version per component name, across every major.minor
+  # line. Zero-padded so the sort is numeric: 10.0.0 must beat 9.0.0.
+  # The version is packed after the sort key and unpacked with [3].
+  latest_component_versions = {
+    for name, builds in { for b in local.published_builds : b.name => b... } :
+    name => split("|", reverse(sort([
+      for b in builds : format("%09d|%09d|%09d|%s", b.major, b.minor, b.patch, b.version)
+    ]))[0])[3]
+  }
 
   # Newest build per component as "patch|build|arn", or "" if never published.
   # Zero-padded so a text sort orders numerically.

@@ -10,12 +10,11 @@ resource "aws_imagebuilder_image_pipeline" "ondemand" {
         enhanced_image_metadata_enabled  = true
  
         # Dynamically add the image_tests_configuration block only if var.ondemand_pipeline_tests_toggle is 'true'
-        dynamic "image_tests_configuration" {
-                for_each = var.ondemand_pipeline_tests_toggle != "" ? [1] : []
-                content {
-                        image_tests_enabled = var.ondemand_pipeline_tests_toggle
-                        timeout_minutes     = var.ondemand_pipeline_tests_timeout
-                }
+        ### Always emitted. Omitting the block makes AWS default image tests to
+        ### enabled, so the toggle has to be sent explicitly to turn them off.
+        image_tests_configuration {
+                image_tests_enabled = var.ondemand_pipeline_tests_toggle
+                timeout_minutes     = var.ondemand_pipeline_tests_timeout
         }
 
         lifecycle {
