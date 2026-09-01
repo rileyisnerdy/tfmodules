@@ -109,20 +109,85 @@ output "latest_component_versions" {
 } 
 
 locals {
-  component_paths = { for component, attribute in local.included_components : component => attribute.path }
+  # Component key => AWS resource name.
+  component_names = {
+    for c, a in local.merged_components_list :
+    c => lower(replace("${var.globals["aws_resource_nametag_prefix"]}_${var.image_name}_${substr(c, 4, -1)}", "_", "-"))
+    if !local.is_managed[c]
+  }
+
+  # Component key => YAML path. included_components_config_path already has path.module.
+  component_files = {
+    for c, a in local.merged_components_list :
+    c => "${local.included_components_config_path}/${a.path != "" ? a.path : "${substr(c, 4, -1)}.yml"}"
+    if !local.is_managed[c]
+  }
+
+  # Rendered once so the hash covers exactly what gets uploaded.
+  component_docs = {
+    for c, f in local.component_files :
+    c => length(local.merged_components_list[c].parameters) > 0 ? templatefile(f, local.merged_components_list[c].parameters) : file(f)
+  }
+
+  component_hashes = { for c, doc in local.component_docs : c => md5(doc) }
+
+  # Caller owns major.minor. We manage the patch number.
+  version_lines = {
+    for c, a in local.merged_components_list :
+    c => length(regexall("^\\d+\\.\\d+\\.\\d+$", a.version)) > 0 ? "${split(".", a.version)[0]}.${split(".", a.version)[1]}" : "1.0"
+    if !local.is_managed[c]
+  }
 }
 
-resource "null_resource" "version_bump_check" {
-        for_each =  { for name,path in local.component_paths : name => path if path != "" }
+locals {
+  # ARN: arn:...:component/<name>/<major>.<minor>.<patch>/<build>
+  published_builds = [
+    for arn in data.aws_imagebuilder_components.historical_versions.arns : {
+      arn   = arn
+      name  = split("/", arn)[1]
+      line  = "${split(".", split("/", arn)[2])[0]}.${split(".", split("/", arn)[2])[1]}"
+      patch = tonumber(split(".", split("/", arn)[2])[2])
+      build = tonumber(split("/", arn)[3])
+    }
+    if length(split("/", arn)) == 4
+  ]
 
-        triggers = { 
-                file_hash = filemd5("${path.module}/${local.included_components_config_path}/${each.value}") 
-        }
+  # Newest build per component as "patch|build|arn", or "" if never published.
+  # Zero-padded so a text sort orders numerically.
+  newest_build = {
+    for c, line in local.version_lines :
+    c => try(reverse(sort([
+      for b in local.published_builds : format("%09d|%09d|%s", b.patch, b.build, b.arn)
+      if b.name == local.component_names[c] && b.line == line
+    ]))[0], "")
+  }
 
+  published_patch = { for c, s in local.newest_build : c => s == "" ? -1 : tonumber(split("|", s)[0]) }
+  published_arn   = { for c, s in local.newest_build : c => s == "" ? "" : split("|", s)[2] }
 }
 
-output "null_resource_version_bump_check" {
-        value = null_resource.version_bump_check
+data "aws_imagebuilder_component" "published" {
+  for_each = { for c, arn in local.published_arn : c => arn if arn != "" }
+
+  arn = each.value
+}
+
+locals {
+  # Compare the tag we set at publish time, not the document body, which AWS may reformat.
+  content_changed = {
+    for c, arn in local.published_arn :
+    c => arn == "" || try(data.aws_imagebuilder_component.published[c].tags["content_md5"], "") != local.component_hashes[c]
+  }
+
+  # Unchanged: hold. Changed or new: next patch. Never published is patch -1, so new starts at .0.
+  component_versions = {
+    for c, line in local.version_lines :
+    c => local.content_changed[c] ? "${line}.${local.published_patch[c] + 1}" : "${line}.${local.published_patch[c]}"
+  }
+}
+
+output "component_versions" {
+  value = local.component_versions
 }
 
 
@@ -143,10 +208,9 @@ locals {
                                                                 arn  = ( local.is_managed[component] ? "arn:aws-us-gov:imagebuilder:${var.globals["region"]}:${attribute.name}" 
                                                                                                      : "arn:aws-us-gov:imagebuilder:${var.globals["region"]}:${var.globals["account_id"]}:component/${lower(replace("${var.globals["aws_resource_nametag_prefix"]}_${var.image_name}_${substr(component, 4, -1)}", "_", "-"))}/${attribute.version != "" ? attribute.version : var.recipe_version}" )
                                                                                                                                         
-                                                                path               = ( local.is_managed[component] ? "" : attribute.path != "" ? attribute.path
-                                                                                                                       : "${local.included_components_config_path}/${substr(component, 4, -1)}.yml")
+                                                                path               = local.is_managed[component] ? "" : local.component_files[component]
 
-                                                                version            = ( local.is_managed[component] ? "" : length(regexall("\\d+\\.\\d+\\.\\d+", attribute.version)) > 0 ? ( null_resource.version_bump_check["${lower(replace("${var.globals["aws_resource_nametag_prefix"]}_${var.image_name}_${substr(component, 4, -1)}", "_", "-"))}"].triggers.file_hash ? join(".", [ tonumber(split(".", attribute.version)[0]), tonumber(split(".", attribute.version)[1]),tonumber(split(".", attribute.version)[2])+1 ]) : attribute.version ) : "1.0.0" ) ### needs check on version x.y.z 
+                                                                version            = local.is_managed[component] ? "" : local.component_versions[component]
 
                                                                 description        =( local.is_managed[component] ? "" : attribute.description != "" ? attribute.description  
                                                                                                                         : "" )

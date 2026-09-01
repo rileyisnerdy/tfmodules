@@ -10,8 +10,10 @@ resource "aws_imagebuilder_component" "prepared_components" {
         ### VERSION AND CHANGE DESCRIPTION FOR THIS SPECIFIC RELEASE x.y.z
         change_description = each.value.change_description == "" ? null : each.value.change_description
 
-        data = ( length(regexall("^aws", each.value.name)) > 0 ) ?  null : ( can(each.value.parameters) ? templatefile("${path.module}/${local.included_components_config_path}/${each.value.name}.yml", each.value.parameters) 
-                                                                                                         : file("${path.module}/${local.included_components_config_path}/${each.value.name}.yml"))
+        data = local.component_docs[each.key]
+
+        # Read back on the next plan to detect content changes. Do not ignore_changes this.
+        tags = { content_md5 = local.component_hashes[each.key] }
 
 }
 
